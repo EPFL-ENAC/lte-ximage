@@ -10,10 +10,11 @@ import dask.array
 import dask_image.ndmeasure
 import numpy as np
 import xarray as xr
+from typing import Callable
 from skimage.measure import label as label_image
 from skimage.morphology import binary_dilation, disk
-
 from ximage.utils.checks import are_all_natural_numbers
+
 
 # TODO:
 # - Enable to label in n-dimensions
@@ -21,24 +22,42 @@ from ximage.utils.checks import are_all_natural_numbers
 #   - (2D+TIME) --> TRACKING
 
 
-####--------------------------------------------------------------------------.
-
-
-def _mask_buffer(mask, footprint):
+def _mask_buffer(
+    mask: np.ndarray,
+    footprint: float | int | None = None
+) -> np.ndarray:
     """Dilate the mask by n pixel in all directions.
 
     If footprint = 0 or None, no dilation occur.
     If footprint is a positive integer, it create a disk(footprint)
     If footprint is a 2D array, it must represent the neighborhood expressed
     as a 2-D array of 1’s and 0’s.
-    For more info: https://scikit-image.org/docs/stable/api/skimage.morphology.html#skimage.morphology.binary_dilation
+    For more info: https://scikit-image.org/docs/stable/api/skimage.morphology.html#skimage.morphology.binary_dilation  # noqa
 
+    Parameters
+    ----------
+    mask : np.ndarray
+        Mask array.
+    footprint : (int, np.ndarray or None), optional
+        This argument enables to dilate the mask derived after applying
+        min_value_threshold and max_value_threshold.
+        If footprint = 0 or None, no dilation occur.
+        If footprint is a positive integer, it create a disk(footprint)
+        If footprint is a 2D array, it must represent the neighborhood
+        expressed as a 2-D array of 1’s and 0’s.
+        The default is None (no dilation).
     """
+
     # scikitimage > 0.19
     if not isinstance(footprint, (int, np.ndarray, type(None))):
-        raise TypeError("`footprint` must be an integer, numpy 2D array or None.")
+        raise TypeError(
+            "`footprint` must be an integer, numpy 2D array or None."
+        )
     if isinstance(footprint, np.ndarray) and footprint.ndim != 2:
-        raise ValueError("If providing the footprint for dilation as np.array, it must be 2D.")
+        raise ValueError(
+            "If providing the footprint for dilation as np.array, "
+            "it must be 2D."
+        )
     if isinstance(footprint, int):
         if footprint < 0:
             raise ValueError("Footprint must be equal or larger than 1.")
@@ -46,11 +65,15 @@ def _mask_buffer(mask, footprint):
     # Apply dilation
     if footprint is not None:
         mask = binary_dilation(mask, footprint=footprint)
+
     return mask
 
 
-def _check_array(arr):
+def _check_array(
+    arr: np.ndarray | dask.array.Array | xr.DataArray,
+) -> np.ndarray:
     """Check array and return a numpy array."""
+
     shape = arr.shape
     if len(shape) != 2:
         raise ValueError("Expecting a 2D array.")
@@ -59,18 +82,24 @@ def _check_array(arr):
 
     if not isinstance(arr, np.ndarray):
         arr = arr.compute()
+
     return arr
 
 
-def _no_labels_result(arr):
+def _no_labels_result(
+    arr: np.ndarray | dask.array.Array | xr.DataArray,
+) -> tuple[np.ndarray, int, np.ndarray]:
     """Define results for array without labels."""
+
     labels = np.zeros(arr.shape)
     n_labels = 0
     values = []
     return labels, n_labels, values
 
 
-def _check_sort_by(stats):
+def _check_sort_by(
+    stats: Callable | str,
+) -> None:
     """Check 'sort_by' argument."""
     if not (callable(stats) or isinstance(stats, str)):
         raise TypeError("'sort_by' must be a string or a function.")
@@ -89,8 +118,11 @@ def _check_sort_by(stats):
             raise ValueError(f"Valid 'sort_by' values are: {valid_stats}.")
 
 
-def _check_stats(stats):
+def _check_stats(
+    stats: Callable | str,
+) -> Callable | str:
     """Check 'stats' argument."""
+
     if not (callable(stats) or isinstance(stats, str)):
         raise TypeError("'stats' must be a string or a function.")
     if isinstance(stats, str):
@@ -106,21 +138,52 @@ def _check_stats(stats):
         ]
         if stats not in valid_stats:
             raise ValueError(f"Valid 'stats' values are: {valid_stats}.")
-    # TODO: check stats function works on a dummy array (reduce to single value)
+    # TODO: check stats function works on a dummy array(reduce to single value)
+
     return stats
 
 
-def _get_label_value_stats(arr, label_arr, label_indices=None, stats="area"):
-    """Compute label value statistics over which to later sort on.
+def _get_label_value_stats(
+    arr: np.ndarray | dask.array.Array | xr.DataArray,
+    label_arr: np.ndarray | dask.array.Array | xr.DataArray,
+    label_indices: np.ndarray | None = None,
+    stats: str | Callable = "area",
+) -> np.ndarray:
+    """ Compute label value statistics over which to later sort on.
 
-    If label_indices is None, by default would return the stats of the entire array
-    If label_indices is 0, return nan
-    If label_indices is not inside label_arr, return 0
+    Parameters
+    ----------
+    arr : np.ndarray | dask.array.Array | xr.DataArray
+        Array of values.
+    label_arr : np.ndarray | dask.array.Array | xr.DataArray
+        Array of labels.
+    label_indices : np.ndarray, optional
+        Array of label indices.
+        If None, it takes the unique values of label_arr.
+        If 0, it returns nan.
+        If not inside label_arr, it returns 0.
+        The default is None.
+    stats : str or callable, optional
+        Statistics to compute.
+        If str, it must be one of the following:
+            "area", "maximum", "minimum", "mean", "median", "sum",
+            "standard_deviation", "variance".
+        If callable, it must be a function that takes an array and outputs a
+        single value.
+        The default is "area".
+
+    Returns
+    -------
+    values : np.ndarray
+        Array of length n_labels with the stats values associated to each
+        label.
     """
+
     # Check stats argument and label indices
     stats = _check_stats(stats)
     if label_indices is None:
         label_indices = np.unique(label_arr)
+
     # Compute labels stats values
     if callable(stats):
         values = dask_image.ndmeasure.labeled_comprehension(
@@ -136,18 +199,28 @@ def _get_label_value_stats(arr, label_arr, label_indices=None, stats="area"):
         values = func(image=arr, label_image=label_arr, index=label_indices)
     # Compute values
     values = values.compute()
-    # Return values
+
     return values
 
 
-def _get_labels_stats(arr, label_arr, label_indices=None, stats="area", sort_decreasing=True):
+def _get_labels_stats(
+    arr: np.ndarray | dask.array.Array | xr.DataArray,
+    label_arr: np.ndarray | dask.array.Array | xr.DataArray,
+    label_indices: np.ndarray | None = None,
+    stats: str | Callable = "area",
+    sort_decreasing: bool = True,
+) -> tuple[np.ndarray, np.ndarray]:
     """Return label and label statistics sorted by statistic value."""
+
     # Get labels area values
     values = _get_label_value_stats(
         arr, label_arr=label_arr, label_indices=label_indices, stats=stats
     )
     # Get sorting index based on values
-    sort_index = np.argsort(values)[::-1] if sort_decreasing else np.argsort(values)
+    if sort_decreasing:
+        sort_index = np.argsort(values)[::-1]
+    else:
+        sort_index = np.argsort(values)
 
     # Sort values
     values = values[sort_index]
@@ -156,7 +229,10 @@ def _get_labels_stats(arr, label_arr, label_indices=None, stats="area", sort_dec
     return label_indices, values
 
 
-def _vec_translate(arr, my_dict):
+def _vec_translate(
+    arr: np.ndarray | dask.array.Array | xr.DataArray,
+    my_dict: dict[int, int],
+) -> np.ndarray | dask.array.Array | xr.DataArray:
     """Remap array <value> based on the dictionary key-value pairs.
 
     This function is used to redefine label array integer values based on the
@@ -167,8 +243,13 @@ def _vec_translate(arr, my_dict):
     return np.vectorize(my_dict.__getitem__)(arr)
 
 
-def _get_labels_with_requested_occurrence(label_arr, vmin, vmax):
-    "Get label indices with requested occurrence."
+def _get_labels_with_requested_occurrence(
+    label_arr: np.ndarray | dask.array.Array | xr.DataArray,
+    vmin: int,
+    vmax: int,
+) -> np.ndarray:
+    """ Get label indices with requested occurrence. """
+
     # Compute label occurrence
     label_indices, label_occurrence = np.unique(label_arr, return_counts=True)
 
@@ -176,21 +257,41 @@ def _get_labels_with_requested_occurrence(label_arr, vmin, vmax):
     if label_indices[0] == 0:
         label_indices = label_indices[1:]
         label_occurrence = label_occurrence[1:]
+
     # Get index with required occurrence
     valid_area_indices = np.where(
         np.logical_and(label_occurrence >= vmin, label_occurrence <= vmax)
     )[0]
+
     # Return list of valid label indices
-    label_indices = label_indices[valid_area_indices] if len(valid_area_indices) > 0 else []
+    if len(valid_area_indices) > 0:
+        label_indices = label_indices[valid_area_indices]
+    else:
+        label_indices = []
+
     return label_indices
 
 
-def _ensure_valid_label_arr(label_arr):
+def _ensure_valid_label_arr(
+    label_arr: np.ndarray | dask.array.Array | xr.DataArray,
+) -> np.ndarray | dask.array.Array | xr.DataArray:
     """Ensure label_arr does contain only positive values.
 
     NaN values are converted to 0.
     The output array type is int.
+
+    Parameters
+    ----------
+    label_arr : np.ndarray | dask.array.Array | xr.DataArray
+        Array of labels.
+
+    Returns
+    -------
+    label_arr : np.ndarray | dask.array.Array | xr.DataArray
+        Array of labels with only positive values.
+
     """
+
     # Ensure data are numpy
     label_arr = np.asanyarray(label_arr)
 
@@ -199,43 +300,92 @@ def _ensure_valid_label_arr(label_arr):
 
     # Check that label arr values are positive integers
     if not are_all_natural_numbers(label_arr.flatten(), zero_allowed=True):
-        raise ValueError("The label array must contain only positive integers.")
+        raise ValueError(
+            "The label array must contain only positive integers."
+        )
 
     # Ensure label array is integer dtype
     label_arr = label_arr.astype(int)
+
     return label_arr
 
 
-def _ensure_valid_label_indices(label_indices):
-    """Ensure valid label indices are integers and does not contains 0 and NaN."""
-    label_indices = np.delete(label_indices, np.where(label_indices == 0)[0].flatten())
-    label_indices = np.delete(label_indices, np.where(np.isnan(label_indices))[0].flatten())
+def _ensure_valid_label_indices(
+    label_indices: np.ndarray,
+) -> np.ndarray:
+    """
+    Ensure valid label indices are integers and does not contains 0 and NaN.
+    """
+
+    label_indices = np.delete(
+        label_indices, np.where(label_indices == 0)[0].flatten()
+    )
+    label_indices = np.delete(
+        label_indices, np.where(np.isnan(label_indices))[0].flatten()
+    )
     label_indices = label_indices.astype(int)
+
     return label_indices
 
 
-def get_label_indices(arr):
+def get_label_indices(
+    arr: np.ndarray | dask.array.Array | xr.DataArray,
+) -> np.ndarray | dask.array.Array | xr.DataArray:
     """Get label indices from numpy.ndarray, dask.Array and xr.DataArray.
 
     It removes 0 and NaN values. Output type is int.
     """
+
     arr = np.asanyarray(arr)
     arr = arr[~np.isnan(arr)]
     arr = arr.astype(int)  # otherwise precision error in unique
     label_indices = np.unique(arr)
     label_indices = _ensure_valid_label_indices(label_indices)
+
     return label_indices
 
 
-def _check_unique_label_indices(label_indices):
+def _check_unique_label_indices(
+    label_indices: np.ndarray,
+) -> None:
+    """ Check label indices are unique.
+
+    Parameters
+    ----------
+    label_indices : np.ndarray
+        Array of label indices.
+
+    Raises
+    ------
+    ValueError
+        If label indices are not unique.
+    """
     _, c = np.unique(label_indices, return_counts=True)
     if np.any(c > 1):
         raise ValueError("'label_indices' must be uniques.")
 
 
-def _get_new_label_value_dict(label_indices, max_label):
-    """Create dictionary mapping from current label value to new label value."""
-    # Initialize dictionary with keys corresponding to all possible labels indices
+def _get_new_label_value_dict(
+    label_indices: np.ndarray,
+    max_label: int
+) -> dict[int, int]:
+    """ Create dictionary mapping from current label value to new label value.
+
+    Parameters
+    ----------
+    label_indices : np.ndarray
+        Array of label indices.
+    max_label : int
+        Maximum label value.
+
+    Returns
+    -------
+    val_dict : dict[int, int]
+        Dictionary mapping from current label value to new label value.
+    """
+
+    # Initialize dictionary with keys corresponding to all possible labels
+    # indices
     val_dict = {k: 0 for k in range(0, max_label + 1)}
 
     # Update the dictionary keys with the selected label_indices
@@ -243,13 +393,19 @@ def _get_new_label_value_dict(label_indices, max_label):
     n_labels = len(label_indices)
     label_indices = label_indices.tolist()
     label_indices_new = np.arange(1, n_labels + 1, dtype=int).tolist()
+
     for k, v in zip(label_indices, label_indices_new):
         val_dict[k] = v
+
     return val_dict
 
 
-def _np_redefine_label_array(label_arr, label_indices=None):
-    """Relabel a numpy/dask array from 0 to len(label_indices)."""
+def _np_redefine_label_array(
+    label_arr: np.ndarray,
+    label_indices: np.ndarray | None = None
+) -> np.ndarray:
+    """ Relabel a numpy/dask array from 0 to len(label_indices). """
+
     # Ensure data are numpy
     label_arr = np.asanyarray(label_arr)
 
@@ -262,7 +418,7 @@ def _np_redefine_label_array(label_arr, label_indices=None):
     label_indices = _ensure_valid_label_indices(label_indices)
 
     # Ensure label array values are integer
-    label_arr = _ensure_valid_label_arr(label_arr)  # output is int, without NaN
+    label_arr = _ensure_valid_label_arr(label_arr)  # output int, without NaN
 
     # Check there are label_indices
     if len(label_indices) == 0:
@@ -272,10 +428,12 @@ def _np_redefine_label_array(label_arr, label_indices=None):
     max_label = max(label_indices)
 
     # Set to 0 labels in label_arr larger than max_label
-    # - These are some of the labels that were set to 0 because of mask or area filtering
+    # - These are some of the labels that were set to 0 because of mask or
+    # area filtering
     label_arr[label_arr > max_label] = 0
 
-    # Initialize dictionary with keys corresponding to all possible labels indices
+    # Initialize dictionary with keys corresponding to all possible labels
+    # indices
     val_dict = _get_new_label_value_dict(label_indices, max_label)
 
     # Redefine the id of the labels
@@ -284,15 +442,24 @@ def _np_redefine_label_array(label_arr, label_indices=None):
     return labels_arr
 
 
-def _xr_redefine_label_array(dataarray, label_indices=None):
+def _xr_redefine_label_array(
+    dataarray: xr.DataArray,
+    label_indices: np.ndarray | None = None
+) -> xr.DataArray:
     """Relabel a xr.DataArray from 0 to len(label_indices)."""
-    relabeled_arr = _np_redefine_label_array(dataarray.data, label_indices=label_indices)
+
+    relabeled_arr = _np_redefine_label_array(dataarray.data,
+                                             label_indices=label_indices)
     da_label = dataarray.copy()
     da_label.data = relabeled_arr
+
     return da_label
 
 
-def redefine_label_array(data, label_indices=None):
+def redefine_label_array(
+    data: np.ndarray | dask.array.Array | xr.DataArray,
+    label_indices: np.ndarray | None = None
+) -> np.ndarray | dask.array.Array | xr.DataArray:
     """Redefine labels of a label array from 0 to len(label_indices).
 
     If label_indices is None, it takes the unique values of label_arr.
@@ -311,7 +478,10 @@ def redefine_label_array(data, label_indices=None):
         raise TypeError(f"This method does not accept {type_data}")
 
 
-def _check_xr_obj(xr_obj, variable):
+def _check_xr_obj(
+    xr_obj: xr.DataArray | xr.Dataset,
+    variable: str
+) -> None:
     """Check xarray object and variable validity."""
     # Check inputs
     if not isinstance(xr_obj, (xr.Dataset, xr.DataArray)):
@@ -321,22 +491,27 @@ def _check_xr_obj(xr_obj, variable):
         if variable is None:
             raise ValueError("An xr.Dataset 'variable' must be specified.")
         if variable not in xr_obj.data_vars:
-            raise ValueError(f"'{variable}' is not a variable of the xr.Dataset.")
+            raise ValueError(
+                f"'{variable}' is not a variable of the xr.Dataset."
+            )
     else:
         if variable is not None:
-            raise ValueError("'variable' must not be specified when providing a xr.DataArray.")
+            raise ValueError(
+                "'variable' must not be specified when providing a "
+                " xr.DataArray."
+            )
 
 
 def _get_labels(
-    arr,
-    min_value_threshold=-np.inf,
-    max_value_threshold=np.inf,
-    min_area_threshold=1,
-    max_area_threshold=np.inf,
-    footprint=None,
-    sort_by="area",
-    sort_decreasing=True,
-):
+    arr: np.ndarray | dask.array.Array | xr.DataArray,
+    min_value_threshold: float = -np.inf,
+    max_value_threshold: float = np.inf,
+    min_area_threshold: float = 1,
+    max_area_threshold: float = np.inf,
+    footprint: float | int | None = None,
+    sort_by: Callable | str = "area",
+    sort_decreasing: bool = True,
+) -> tuple[np.ndarray, int, np.ndarray]:
     """
     Function deriving the labels array and associated labels info.
 
@@ -361,8 +536,8 @@ def _get_labels(
         min_value_threshold and max_value_threshold.
         If footprint = 0 or None, no dilation occur.
         If footprint is a positive integer, it create a disk(footprint)
-        If footprint is a 2D array, it must represent the neighborhood expressed
-        as a 2-D array of 1’s and 0’s.
+        If footprint is a 2D array, it must represent the neighborhood
+        expressed as a 2-D array of 1’s and 0’s.
         The default is None (no dilation).
     sort_by : (callable or str), optional
         A function or statistics to define the order of the labels.
@@ -380,12 +555,13 @@ def _get_labels(
     n_labels, int
         Number of labels in the labels array.
     values, np.arrays
-        Array of length n_labels with the stats values associated to each label.
+        Array of length n_labels with the stats values associated to each
+        label.
     """
     # ---------------------------------.
     # TODO: this could be extended to work with dask >2D array
-    # - dask_image.ndmeasure.label  https://image.dask.org/en/latest/dask_image.ndmeasure.html
-    # - dask_image.ndmorph.binary_dilation https://image.dask.org/en/latest/dask_image.ndmorph.html#dask_image.ndmorph.binary_dilation
+    # - dask_image.ndmeasure.label  https://image.dask.org/en/latest/dask_image.ndmeasure.html  # noqa
+    # - dask_image.ndmorph.binary_dilation https://image.dask.org/en/latest/dask_image.ndmorph.html#dask_image.ndmorph.binary_dilation  # noqa
 
     # ---------------------------------.
     # Check array validity
@@ -398,11 +574,13 @@ def _get_labels(
     # Define masks
     # - mask_native: True when between min and max thresholds
     # - mask_nan: True where is not finite (inf or nan)
-    mask_native = np.logical_and(arr >= min_value_threshold, arr <= max_value_threshold)
+    mask_native = np.logical_and(arr >= min_value_threshold,
+                                 arr <= max_value_threshold)
     mask_nan = ~np.isfinite(arr)
     # ---------------------------------.
     # Dilate (buffer) the native mask
-    # - This enable to assign closely connected mask_native areas to the same label
+    # - This enable to assign closely connected mask_native areas to the same
+    #   label
     mask = _mask_buffer(mask_native, footprint=footprint)
 
     # ---------------------------------.
@@ -459,15 +637,15 @@ def _get_labels(
 
 
 def _xr_get_labels(
-    data_array,
-    min_value_threshold=-np.inf,
-    max_value_threshold=np.inf,
-    min_area_threshold=1,
-    max_area_threshold=np.inf,
-    footprint=None,
-    sort_by="area",
-    sort_decreasing=True,
-):
+    data_array: xr.DataArray,
+    min_value_threshold: float = -np.inf,
+    max_value_threshold: float = np.inf,
+    min_area_threshold: float = 1,
+    max_area_threshold: float = np.inf,
+    footprint: float | int | None = None,
+    sort_by: Callable | str = "area",
+    sort_decreasing: bool = True,
+) -> tuple[xr.DataArray, int, np.ndarray]:
     """
     Function deriving the labels array and associated labels info.
 
@@ -492,8 +670,8 @@ def _xr_get_labels(
         min_value_threshold and max_value_threshold.
         If footprint = 0 or None, no dilation occur.
         If footprint is a positive integer, it create a disk(footprint)
-        If footprint is a 2D array, it must represent the neighborhood expressed
-        as a 2-D array of 1’s and 0’s.
+        If footprint is a 2D array, it must represent the neighborhood
+        expressed as a 2-D array of 1’s and 0’s.
         The default is None (no dilation).
     sort_by : (callable or str), optional
         A function or statistics to define the order of the labels.
@@ -512,7 +690,8 @@ def _xr_get_labels(
     n_labels, int
         Number of labels in the labels array.
     values, np.arrays
-        Array of length n_labels with the stats values associated to each label.
+        Array of length n_labels with the stats values associated to each
+        label.
     """
     # Extract data from DataArray
     if not isinstance(data_array, xr.DataArray):
@@ -539,17 +718,17 @@ def _xr_get_labels(
 
 
 def label(
-    xr_obj,
-    variable=None,
-    min_value_threshold=-np.inf,
-    max_value_threshold=np.inf,
-    min_area_threshold=1,
-    max_area_threshold=np.inf,
-    footprint=None,
-    sort_by="area",
-    sort_decreasing=True,
-    label_name="label",
-):
+    xr_obj: xr.DataArray | xr.Dataset,
+    variable: str | None = None,
+    min_value_threshold: float = -np.inf,
+    max_value_threshold: float = np.inf,
+    min_area_threshold: float = 1,
+    max_area_threshold: float = np.inf,
+    footprint: float | int | None = None,
+    sort_by: Callable | str = "area",
+    sort_decreasing: bool = True,
+    label_name: str = "label",
+) -> xr.DataArray | xr.Dataset:
     """
     Compute labels and and add as a coordinates to an xarray object.
 
@@ -577,8 +756,8 @@ def label(
         min_value_threshold and max_value_threshold.
         If footprint = 0 or None, no dilation occur.
         If footprint is a positive integer, it create a disk(footprint)
-        If footprint is a 2D array, it must represent the neighborhood expressed
-        as a 2-D array of 1’s and 0’s.
+        If footprint is a 2D array, it must represent the neighborhood
+        expressed as a 2-D array of 1’s and 0’s.
         The default is None (no dilation).
     sort_by : (callable or str), optional
         A function or statistics to define the order of the labels.
@@ -588,6 +767,8 @@ def label(
     sort_decreasing : bool, optional
         If True, sort labels by decreasing 'sort_by' value.
         The default is True.
+    label_name : str, optional
+        Name of the label.
 
     Returns
     -------
@@ -599,7 +780,10 @@ def label(
     _check_xr_obj(xr_obj=xr_obj, variable=variable)
 
     # Retrieve labels (if available)
-    data_array_to_label = xr_obj[variable] if isinstance(xr_obj, xr.Dataset) else xr_obj
+    if isinstance(xr_obj, xr.Dataset):
+        data_array_to_label = xr_obj[variable]
+    else:
+        data_array_to_label = xr_obj
 
     da_labels, n_labels, values = _xr_get_labels(
         data_array=data_array_to_label,
@@ -613,7 +797,8 @@ def label(
     )
     if n_labels == 0:
         raise ValueError(
-            "No patch available. You might want to change the patch generator parameters."
+            "No patch available. You might want to change the patch generator "
+            "parameters."
         )
 
     # Set labels values == 0 to np.nan (useful for plotting)
@@ -625,10 +810,16 @@ def label(
     return xr_obj
 
 
-def highlight_label(xr_obj, label_name, label_id):
+def highlight_label(
+    xr_obj: xr.DataArray | xr.Dataset,
+    label_name: str,
+    label_id: int,
+) -> xr.DataArray | xr.Dataset:
     """Set all labels values to 0 except for 'label_id'."""
-    xr_obj = xr_obj.copy(deep=True)  # required otherwise overwrite original data
+
+    xr_obj = xr_obj.copy(deep=True)  # required otherwise overwrite orig. data
     label_arr = xr_obj[label_name].data
     label_arr[label_arr != label_id] = 0
     xr_obj[label_name].data = label_arr
+
     return xr_obj
